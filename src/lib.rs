@@ -9,7 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 use task_local_extensions::Extensions;
 use tokio::sync::Mutex;
 use tokio_cron_scheduler::Job as CronJob;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct NacosLoadBalancer<T> {
     client: T,
@@ -49,6 +49,7 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
+        println!("============================================");
         let url = req.url_mut();
         let service_name = url.host_str().unwrap();
         let mut services = self.services.lock().await;
@@ -66,6 +67,7 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
                     )
                     .await
                     .map_err(anyhow::Error::from)?;
+                error!("select instances: {:?}", instances);
                 services.insert(service_name.to_owned(), instances);
                 self.subscribe(service_name).await?;
                 services.get(service_name).unwrap()
@@ -93,6 +95,7 @@ impl NamingEventListener for EventListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
         if let Some(ints) = &event.instances {
             let mut services = self.services.blocking_lock();
+            error!("receive naming events: {:?}", event);
             services.insert(
                 event.service_name.clone(),
                 ints.iter().filter(|i| i.healthy()).cloned().collect(),
