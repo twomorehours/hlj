@@ -1,10 +1,10 @@
+use clap::Parser;
 use hlj::{JobScheduler, NacosLoadBalancer};
 use nacos_sdk::api::{naming::NamingServiceBuilder, props::ClientProps};
 use reqwest::Client;
 use reqwest_middleware::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
-use clap::Parser;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Jobs {
@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let naming_service = NamingServiceBuilder::new(
         ClientProps::new()
             .server_addr(cli.nacos_addr)
+            .naming_push_empty_protection(false)
             .app_name("huanglongjiang"),
     )
     .build()?;
@@ -38,10 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let reqwest_client = Client::builder().build().unwrap();
     let client = Arc::new(
         ClientBuilder::new(reqwest_client)
-            .with(NacosLoadBalancer::new(
-                naming_service,
-                cli.nacos_group,
-            ))
+            .with(NacosLoadBalancer::new(naming_service, cli.nacos_group))
             .build(),
     );
 

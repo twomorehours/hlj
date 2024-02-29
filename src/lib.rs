@@ -93,14 +93,17 @@ struct EventListener {
 
 impl NamingEventListener for EventListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
-        if let Some(ints) = &event.instances {
-            let mut services = self.services.blocking_lock();
-            error!("receive naming events: {:?}", event);
-            services.insert(
-                event.service_name.clone(),
-                ints.iter().filter(|i| i.healthy()).cloned().collect(),
-            );
-        }
+        let services = self.services.clone();
+        tokio::spawn(async move {
+            if let Some(ints) = &event.instances {
+                let mut services = services.lock().await;
+                error!("receive naming events: {:?}", event);
+                services.insert(
+                    event.service_name.clone(),
+                    ints.iter().filter(|i| i.healthy()).cloned().collect(),
+                );
+            }
+        });
     }
 }
 
