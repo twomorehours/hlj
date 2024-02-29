@@ -74,7 +74,8 @@ async fn main() -> anyhow::Result<()> {
     let client = Arc::new(client);
 
     for j in jobs.jobs.iter() {
-        j.run(client.clone()).await?;
+        let result =  j.run(client.clone()).await?;
+        println!("res: {}", result);
     }
     
 

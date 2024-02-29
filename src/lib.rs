@@ -112,23 +112,23 @@ pub struct Job {
 }
 
 impl Job {
-    pub async fn run(&self, http_client: Arc<ClientWithMiddleware>) -> anyhow::Result<()> {
+    pub async fn run(&self, http_client: Arc<ClientWithMiddleware>) -> anyhow::Result<String> {
         match self.method.to_lowercase().as_str() {
             "get" => {
-                http_client
+                let resp: serde_json::Value =  http_client
                     .get(&self.url)
                     .header("Content-Type", &self.content_type)
                     .send()
-                    .await?;
-                Ok(())
+                    .await?.json().await?;
+                Ok(serde_json::to_string(&resp)?)
             }
             "post" => {
                 let mut builer = http_client.post(&self.url).header("Content-Type", &self.content_type);
                 if let Some(body) = &self.body {
                     builer = builer.body(body.clone().into_bytes());
                 }
-                builer.send().await?;
-                Ok(())
+                let resp: serde_json::Value =  builer.send().await?.json().await?;
+                Ok(serde_json::to_string(&resp)?)
             }
             _ => Err(anyhow::anyhow!("unsupport method: {}", self.method)),
         }
