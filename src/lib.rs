@@ -1,15 +1,20 @@
-use nacos_sdk::api::naming::{NamingService, ServiceInstance};
+use anyhow::Ok;
+use nacos_sdk::api::naming::{
+    NamingChangeEvent, NamingEventListener, NamingService, ServiceInstance,
+};
 use rand::seq::SliceRandom;
-use reqwest::{Request, Response};
-use reqwest_middleware::{Middleware, Next, Result};
-use std::collections::HashMap;
+use reqwest::{Method, Request, Response};
+use reqwest_middleware::{ClientWithMiddleware, Middleware, Next, Result};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use task_local_extensions::Extensions;
 use tokio::sync::Mutex;
+use tracing::info;
 
 pub struct NacosLoadBalancer<T> {
     client: T,
     group_name: String,
-    services: Mutex<HashMap<String, Vec<ServiceInstance>>>,
+    services: Arc<Mutex<HashMap<String, Vec<ServiceInstance>>>>,
 }
 
 impl<T: NamingService> NacosLoadBalancer<T> {
@@ -17,18 +22,22 @@ impl<T: NamingService> NacosLoadBalancer<T> {
         NacosLoadBalancer {
             client,
             group_name,
-            services: Mutex::new(HashMap::new()),
+            services: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     async fn subscribe(&self, service_name: &str) -> anyhow::Result<()> {
-        self.client.subscribe(
-            service_name.to_owned(),
-            Some(self.group_name.clone()),
-            vec![],
-            event_listener,
-        );
-        unimplemented!()
+        self.client
+            .subscribe(
+                service_name.to_owned(),
+                Some(self.group_name.clone()),
+                vec![],
+                Arc::new(EventListener {
+                    services: self.services.clone(),
+                }),
+            )
+            .await
+            .map_err(anyhow::Error::from)
     }
 }
 
@@ -43,8 +52,8 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
         let url = req.url_mut();
         let service_name = url.host_str().unwrap();
         let mut services = self.services.lock().await;
-        let choosed: Option<&ServiceInstance> = match services.get(service_name) {
-            Some(instances) => instances.choose(&mut rand::thread_rng()),
+        let ints = match services.get(service_name) {
+            Some(instances) => instances,
             None => {
                 let instances = self
                     .client
@@ -57,17 +66,71 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
                     )
                     .await
                     .map_err(anyhow::Error::from)?;
-                unimplemented!()
+                services.insert(service_name.to_owned(), instances);
+                self.subscribe(service_name).await?;
+                services.get(service_name).unwrap()
             }
         };
-        match choosed {
+        // let mut rng = rand::thread_rng();
+        match ints.get(0) {
+            //todo rng
             Some(inst) => {
-                url.set_host(Some("baidu.com")).unwrap();
+                url.set_host(Some(&inst.ip_and_port())).unwrap();
                 next.run(req, extensions).await
             }
             None => Err(reqwest_middleware::Error::Middleware(anyhow::anyhow!(
                 "no available instance"
             ))),
+        }
+    }
+}
+
+struct EventListener {
+    services: Arc<Mutex<HashMap<String, Vec<ServiceInstance>>>>,
+}
+
+impl NamingEventListener for EventListener {
+    fn event(&self, event: Arc<NamingChangeEvent>) {
+        if let Some(ints) = &event.instances {
+            let mut services = self.services.blocking_lock();
+            services.insert(
+                event.service_name.clone(),
+                ints.iter().filter(|i| i.healthy()).cloned().collect(),
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    name: String,
+    cron: String,
+    method: String,
+    url: String,
+    content_type: String,
+    body: Option<String>,
+}
+
+impl Job {
+    pub async fn run(&self, http_client: Arc<ClientWithMiddleware>) -> anyhow::Result<()> {
+        match self.method.to_lowercase().as_str() {
+            "get" => {
+                http_client
+                    .get(&self.url)
+                    .header("Content-Type", &self.content_type)
+                    .send()
+                    .await?;
+                Ok(())
+            }
+            "post" => {
+                let mut builer = http_client.post(&self.url).header("Content-Type", &self.content_type);
+                if let Some(body) = &self.body {
+                    builer = builer.body(body.clone().into_bytes());
+                }
+                builer.send().await?;
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!("unsupport method: {}", self.method)),
         }
     }
 }

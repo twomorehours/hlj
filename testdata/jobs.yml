@@ -1,0 +1,13 @@
+jobs:
+  - name: job1
+    url: http://mb-external-server:8083
+    method: GET
+    content_type: application/json
+    cron: "1/7 * * * * *"
+  
+  - name: job2
+    url: http://mb-external-server:8083
+    method: POST
+    content_type: application/json
+    cron: "1/7 * * * * *"
+    body: "{}"
