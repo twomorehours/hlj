@@ -1,15 +1,15 @@
-use anyhow::Ok;
 use nacos_sdk::api::naming::{
     NamingChangeEvent, NamingEventListener, NamingService, ServiceInstance,
 };
 use rand::seq::SliceRandom;
-use reqwest::{Method, Request, Response};
+use reqwest::{Request, Response};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use task_local_extensions::Extensions;
 use tokio::sync::Mutex;
-use tracing::info;
+use tokio_cron_scheduler::Job as CronJob;
+use tracing::{info, warn};
 
 pub struct NacosLoadBalancer<T> {
     client: T,
@@ -115,22 +115,62 @@ impl Job {
     pub async fn run(&self, http_client: Arc<ClientWithMiddleware>) -> anyhow::Result<String> {
         match self.method.to_lowercase().as_str() {
             "get" => {
-                let resp: serde_json::Value =  http_client
+                let resp: serde_json::Value = http_client
                     .get(&self.url)
                     .header("Content-Type", &self.content_type)
                     .send()
-                    .await?.json().await?;
+                    .await?
+                    .json()
+                    .await?;
                 Ok(serde_json::to_string(&resp)?)
             }
             "post" => {
-                let mut builer = http_client.post(&self.url).header("Content-Type", &self.content_type);
+                let mut builer = http_client
+                    .post(&self.url)
+                    .header("Content-Type", &self.content_type);
                 if let Some(body) = &self.body {
                     builer = builer.body(body.clone().into_bytes());
                 }
-                let resp: serde_json::Value =  builer.send().await?.json().await?;
+                let resp: serde_json::Value = builer.send().await?.json().await?;
                 Ok(serde_json::to_string(&resp)?)
             }
             _ => Err(anyhow::anyhow!("unsupport method: {}", self.method)),
         }
+    }
+}
+
+pub struct JobScheduler(tokio_cron_scheduler::JobScheduler);
+
+impl JobScheduler {
+    pub async fn new() -> Self {
+        Self(tokio_cron_scheduler::JobScheduler::new().await.unwrap())
+    }
+
+    pub async fn new_async_job(
+        &mut self,
+        job: Job,
+        http_client: Arc<ClientWithMiddleware>,
+    ) -> anyhow::Result<()> {
+        self.0
+            .add(CronJob::new_async(
+                job.cron.clone().as_str(),
+                move |_uuid, mut _l| {
+                    let job = job.clone();
+                    let http_client = http_client.clone();
+                    Box::pin(async move {
+                        info!("start execute job: {}", job.name);
+                        match job.run(http_client.clone()).await {
+                            Ok(resp) => info!("execte job: {} success, result: {}", job.name, resp),
+                            Err(err) => warn!("execte job: {} failed, result: {:?}", job.name, err),
+                        }
+                    })
+                },
+            )?)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn start(&self) -> anyhow::Result<()> {
+        Ok(self.0.start().await?)
     }
 }
