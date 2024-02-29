@@ -3,19 +3,35 @@ use nacos_sdk::api::{naming::NamingServiceBuilder, props::ClientProps};
 use reqwest::Client;
 use reqwest_middleware::ClientBuilder;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+use clap::Parser;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Jobs {
     jobs: Vec<hlj::Job>,
 }
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(long)]
+    nacos_addr: String,
+    #[arg(long)]
+    nacos_group: String,
+    #[arg(long)]
+    job_conf_path: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let cli = Cli::parse();
+
     let naming_service = NamingServiceBuilder::new(
         ClientProps::new()
-            .server_addr("localhost:8848")
-            .app_name("simple_app"),
+            .server_addr(cli.nacos_addr)
+            .app_name("huanglongjiang"),
     )
     .build()?;
 
@@ -24,12 +40,12 @@ async fn main() -> anyhow::Result<()> {
         ClientBuilder::new(reqwest_client)
             .with(NacosLoadBalancer::new(
                 naming_service,
-                "DEFAULT_GROUP".to_owned(),
+                cli.nacos_group,
             ))
             .build(),
     );
 
-    let file_content = std::fs::read_to_string("testdata/jobs.yml")?;
+    let file_content = std::fs::read_to_string(cli.job_conf_path)?;
     let jobs: Jobs = serde_yaml::from_str(&file_content)?;
 
     let mut js = JobScheduler::new().await;
