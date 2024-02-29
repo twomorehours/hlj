@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let naming_service = NamingServiceBuilder::new(
         ClientProps::new()
             .server_addr(cli.nacos_addr)
+            .naming_push_empty_protection(false)
             .app_name("huanglongjiang"),
     )
     .build()?;
