@@ -1,15 +1,15 @@
 use nacos_sdk::api::naming::{
     NamingChangeEvent, NamingEventListener, NamingService, ServiceInstance,
 };
-use rand::seq::SliceRandom;
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use reqwest::{Request, Response};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use task_local_extensions::Extensions;
 use tokio::sync::Mutex;
-use tokio_cron_scheduler::Job as CronJob;
-use tracing::{debug, error, info, warn};
+use tokio_cron_scheduler::JobBuilder;
+use tracing::{info, warn};
 
 pub struct NacosLoadBalancer<T> {
     client: T,
@@ -49,7 +49,6 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
-        println!("============================================");
         let url = req.url_mut();
         let service_name = url.host_str().unwrap();
         let mut services = self.services.lock().await;
@@ -67,15 +66,13 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
                     )
                     .await
                     .map_err(anyhow::Error::from)?;
-                error!("select instances: {:?}", instances);
                 services.insert(service_name.to_owned(), instances);
                 self.subscribe(service_name).await?;
                 services.get(service_name).unwrap()
             }
         };
-        // let mut rng = rand::thread_rng();
-        match ints.get(0) {
-            //todo rng
+
+        match ints.choose(&mut StdRng::from_entropy()) {
             Some(inst) => {
                 url.set_host(Some(&inst.ip_and_port())).unwrap();
                 next.run(req, extensions).await
@@ -93,14 +90,16 @@ struct EventListener {
 
 impl NamingEventListener for EventListener {
     fn event(&self, event: Arc<NamingChangeEvent>) {
-        if let Some(ints) = &event.instances {
-            let mut services = self.services.blocking_lock();
-            error!("receive naming events: {:?}", event);
-            services.insert(
-                event.service_name.clone(),
-                ints.iter().filter(|i| i.healthy()).cloned().collect(),
-            );
-        }
+        let services = self.services.clone();
+        tokio::spawn(async move {
+            if let Some(ints) = &event.instances {
+                let mut services = services.lock().await;
+                services.insert(
+                    event.service_name.clone(),
+                    ints.iter().filter(|i| i.healthy()).cloned().collect(),
+                );
+            }
+        });
     }
 }
 
@@ -154,22 +153,25 @@ impl JobScheduler {
         job: Job,
         http_client: Arc<ClientWithMiddleware>,
     ) -> anyhow::Result<()> {
-        self.0
-            .add(CronJob::new_async(
-                job.cron.clone().as_str(),
-                move |_uuid, mut _l| {
-                    let job = job.clone();
-                    let http_client = http_client.clone();
-                    Box::pin(async move {
-                        info!("start execute job: {}", job.name);
-                        match job.run(http_client.clone()).await {
-                            Ok(resp) => info!("execte job: {} success, result: {}", job.name, resp),
-                            Err(err) => warn!("execte job: {} failed, result: {:?}", job.name, err),
-                        }
-                    })
-                },
-            )?)
-            .await?;
+        let job = JobBuilder::new()
+            .with_timezone(chrono_tz::Asia::Shanghai)
+            .with_cron_job_type()
+            .with_schedule(job.cron.clone().as_str())
+            .unwrap()
+            .with_run_async(Box::new(move |_uuid, mut _l| {
+                let job = job.clone();
+                let http_client = http_client.clone();
+                Box::pin(async move {
+                    info!("start execute job: {}", job.name);
+                    match job.run(http_client.clone()).await {
+                        Ok(resp) => info!("execte job: {} success, result: {}", job.name, resp),
+                        Err(err) => warn!("execte job: {} failed, result: {:?}", job.name, err),
+                    }
+                })
+            }))
+            .build()?;
+
+        self.0.add(job).await?;
         Ok(())
     }
 
