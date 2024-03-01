@@ -5,6 +5,8 @@ use reqwest::Client;
 use reqwest_middleware::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
+use time::macros::{format_description, offset};
+use tracing_subscriber::fmt::time::OffsetTime;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Jobs {
@@ -24,8 +26,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-
+    let timer = OffsetTime::new(offset!(+8), time::format_description::well_known::Rfc3339);
+    tracing_subscriber::fmt().with_timer(timer).init();
     let cli = Cli::parse();
 
     let naming_service = NamingServiceBuilder::new(

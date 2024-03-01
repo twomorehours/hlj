@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use task_local_extensions::Extensions;
 use tokio::sync::Mutex;
-use tokio_cron_scheduler::Job as CronJob;
 use tokio_cron_scheduler::JobBuilder;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 pub struct NacosLoadBalancer<T> {
     client: T,
@@ -174,23 +173,6 @@ impl JobScheduler {
             .build()?;
 
         self.0.add(job).await?;
-
-        // self.0
-        //     .add(CronJob::new_async(
-        //         job.cron.clone().as_str(),
-        //         move |_uuid, mut _l| {
-        //             let job = job.clone();
-        //             let http_client = http_client.clone();
-        //             Box::pin(async move {
-        //                 info!("start execute job: {}", job.name);
-        //                 match job.run(http_client.clone()).await {
-        //                     Ok(resp) => info!("execte job: {} success, result: {}", job.name, resp),
-        //                     Err(err) => warn!("execte job: {} failed, result: {:?}", job.name, err),
-        //                 }
-        //             })
-        //         },
-        //     )?)
-        //     .await?;
         Ok(())
     }
 
