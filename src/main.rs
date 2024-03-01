@@ -5,7 +5,7 @@ use reqwest::Client;
 use reqwest_middleware::ClientBuilder;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
-use time::macros::{format_description, offset};
+use time::macros::offset;
 use tracing_subscriber::fmt::time::OffsetTime;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -11,7 +11,7 @@ async-trait = "0.1.77"
 chrono-tz = "0.8.6"
 clap = { version = "4.5.1", features = ["derive"] }
 nacos-sdk = { version = "0.3", features = ["async"] }
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["std_rng"] }
 reqwest = { version = "0.11", features = ["json"] }
 reqwest-middleware = "0.2.4"
 serde = { version = "1.0.197", features = ["derive"] }

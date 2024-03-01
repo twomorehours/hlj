@@ -1,7 +1,7 @@
 use nacos_sdk::api::naming::{
     NamingChangeEvent, NamingEventListener, NamingService, ServiceInstance,
 };
-use rand::seq::SliceRandom;
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use reqwest::{Request, Response};
 use reqwest_middleware::{ClientWithMiddleware, Middleware, Next, Result};
 use serde::{Deserialize, Serialize};
@@ -71,9 +71,8 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
                 services.get(service_name).unwrap()
             }
         };
-        // let mut rng = rand::thread_rng();
-        match ints.first() {
-            //todo rng
+
+        match ints.choose(&mut StdRng::from_entropy()) {
             Some(inst) => {
                 url.set_host(Some(&inst.ip_and_port())).unwrap();
                 next.run(req, extensions).await
