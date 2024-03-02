@@ -1,12 +1,12 @@
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio_cron_scheduler::JobBuilder;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
-    name: String,
+    id: String,
     cron: String,
     method: String,
     url: String,
@@ -42,41 +42,79 @@ impl Job {
     }
 }
 
-pub struct JobScheduler(tokio_cron_scheduler::JobScheduler);
+pub struct JobScheduler {
+    inner: tokio_cron_scheduler::JobScheduler,
+    jobs: HashMap<String, Job>,
+    http_client: Arc<ClientWithMiddleware>,
+}
 
 impl JobScheduler {
-    pub async fn new() -> Self {
-        Self(tokio_cron_scheduler::JobScheduler::new().await.unwrap())
+    pub async fn new(http_client: Arc<ClientWithMiddleware>) -> Self {
+        Self {
+            inner: tokio_cron_scheduler::JobScheduler::new().await.unwrap(),
+            jobs: HashMap::new(),
+            http_client,
+        }
     }
 
-    pub async fn new_async_job(
-        &mut self,
-        job: Job,
-        http_client: Arc<ClientWithMiddleware>,
-    ) -> anyhow::Result<()> {
-        let job = JobBuilder::new()
-            .with_timezone(chrono_tz::Asia::Shanghai)
-            .with_cron_job_type()
-            .with_schedule(job.cron.clone().as_str())
-            .unwrap()
-            .with_run_async(Box::new(move |_uuid, mut _l| {
+    pub fn add(&mut self, job: Job) {
+        self.jobs.insert(job.id.clone(), job);
+    }
+
+    pub async fn start(&mut self) -> anyhow::Result<()> {
+        for (_id, raw_job) in self.jobs.clone().into_iter() {
+            let http_client = self.http_client.clone();
+            let job = JobBuilder::new()
+                .with_timezone(chrono_tz::Asia::Shanghai)
+                .with_cron_job_type()
+                .with_schedule(raw_job.cron.clone().as_str())
+                .unwrap()
+                .with_run_async(Box::new(move |_uuid, mut _l| {
+                    let raw_job = raw_job.clone();
+                    let http_client = http_client.clone();
+                    Box::pin(async move {
+                        info!("start execute job: {}", raw_job.id.clone());
+                        match raw_job.run(http_client.clone()).await {
+                            Ok(resp) => info!(
+                                "execute job: {} success, result: {}",
+                                raw_job.id.clone(),
+                                resp
+                            ),
+                            Err(err) => {
+                                warn!("execute job: {} failed, result: {:?}", raw_job.id, err)
+                            }
+                        }
+                    })
+                }))
+                .build()?;
+
+            self.inner.add(job).await?;
+        }
+
+        Ok(self.inner.start().await?)
+    }
+
+    pub async fn trigger(&self, job_id: &str) -> anyhow::Result<()> {
+        match self.jobs.get(job_id) {
+            Some(job) => {
+                let http_client = self.http_client.clone();
                 let job = job.clone();
-                let http_client = http_client.clone();
-                Box::pin(async move {
-                    info!("start execute job: {}", job.name);
+                tokio::spawn(async move {
+                    info!("trigger execute job: {}", job.id.clone());
                     match job.run(http_client.clone()).await {
-                        Ok(resp) => info!("execute job: {} success, result: {}", job.name, resp),
-                        Err(err) => warn!("execute job: {} failed, result: {:?}", job.name, err),
+                        Ok(resp) => info!(
+                            "trigger execute job: {} success, result: {}",
+                            job.id.clone(),
+                            resp
+                        ),
+                        Err(err) => {
+                            warn!("trigger execute job: {} failed, result: {:?}", job.id, err)
+                        }
                     }
-                })
-            }))
-            .build()?;
-
-        self.0.add(job).await?;
-        Ok(())
-    }
-
-    pub async fn start(&self) -> anyhow::Result<()> {
-        Ok(self.0.start().await?)
+                });
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("job not found")),
+        }
     }
 }
