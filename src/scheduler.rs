@@ -117,4 +117,8 @@ impl JobScheduler {
             None => Err(anyhow::anyhow!("job not found")),
         }
     }
+
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
+        Ok(self.inner.shutdown().await?)
+    }
 }

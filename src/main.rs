@@ -1,7 +1,14 @@
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Router,
+};
 use clap::Parser;
 use hlj::{
-    scheduler::{Job, JobScheduler},
     lb::NacosLoadBalancer,
+    scheduler::{Job, JobScheduler},
 };
 use local_ip_address::local_ip;
 use nacos_sdk::api::{
@@ -9,12 +16,13 @@ use nacos_sdk::api::{
     props::ClientProps,
 };
 use reqwest::Client;
-use reqwest_middleware::ClientBuilder;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use time::macros::offset;
+use tokio::{net::TcpListener, sync::Mutex};
+use tracing::{info, warn};
 use tracing_subscriber::fmt::time::OffsetTime;
-
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -29,6 +37,18 @@ struct Cli {
     listen_port: u16,
     #[arg(long, default_value = "3")]
     req_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Jobs {
+    jobs: Vec<hlj::scheduler::Job>,
+}
+
+#[derive(Clone)]
+struct AppState {
+    path: PathBuf,
+    js: Arc<Mutex<JobScheduler>>,
+    http_client: Arc<ClientWithMiddleware>,
 }
 
 #[tokio::main]
@@ -73,6 +93,19 @@ async fn main() -> anyhow::Result<()> {
     js.start().await?;
 
     // 启动http服务
+    // build our application with a single route
+    let app_state = AppState {
+        path: cli.job_conf_path.clone(),
+        http_client: client.clone(),
+        js: Arc::new(Mutex::new(js)),
+    };
+    let app = Router::new()
+        // .route("/reload", post(reload))
+        .route("/trigger/:job_id", post(trigger))
+        .with_state(app_state);
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", cli.listen_port)).await?;
+
+    let axum_handle = tokio::spawn(async move { axum::serve(listener, app).await });
 
     // register scheduler self
     let mut instance = ServiceInstance::default();
@@ -87,7 +120,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    tokio::signal::ctrl_c().await?;
+    // wait exit signal
+    tokio::select! {
+        _ = &mut Box::pin(tokio::signal::ctrl_c()) =>  {
+            info!("receive ctrl-c");
+        }
+        res = &mut Box::pin(axum_handle) => {
+            warn!("axum exit, reason: {:?}", res);
+        }
+    }
 
     // deregister scheduler self
     naming_service
@@ -97,12 +138,41 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Jobs {
-    jobs: Vec<hlj::scheduler::Job>,
-}
-
 async fn read_jobs(path: &PathBuf) -> anyhow::Result<Vec<Job>> {
     let file_content = std::fs::read_to_string(path)?;
     Ok(serde_yaml::from_str::<Jobs>(&file_content)?.jobs)
+}
+
+async fn trigger(
+    Path(job_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<(), AppError> {
+    let js = state.js.lock().await;
+    js.trigger(&job_id).await?;
+    Ok(())
+}
+
+// Make our own error that wraps `anyhow::Error`.
+struct AppError(anyhow::Error);
+
+// Tell axum how to convert `AppError` into a response.
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("err: {}", self.0),
+        )
+            .into_response()
+    }
+}
+
+// This enables using `?` on functions that return `Result<_, anyhow::Error>` to turn them into
+// `Result<_, AppError>`. That way you don't need to do that manually.
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
 }
