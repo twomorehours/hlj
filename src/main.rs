@@ -1,6 +1,6 @@
 use clap::Parser;
 use hlj::{
-    job::{Job, JobScheduler},
+    scheduler::{Job, JobScheduler},
     lb::NacosLoadBalancer,
 };
 use local_ip_address::local_ip;
@@ -15,10 +15,6 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use time::macros::offset;
 use tracing_subscriber::fmt::time::OffsetTime;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Jobs {
-    jobs: Vec<hlj::job::Job>,
-}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -99,6 +95,11 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Jobs {
+    jobs: Vec<hlj::scheduler::Job>,
 }
 
 async fn read_jobs(path: &PathBuf) -> anyhow::Result<Vec<Job>> {
