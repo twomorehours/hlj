@@ -12,13 +12,13 @@ use tokio_cron_scheduler::JobBuilder;
 use tracing::{info, warn};
 
 pub struct NacosLoadBalancer<T> {
-    client: T,
+    client: Arc<T>,
     group_name: String,
     services: Arc<Mutex<HashMap<String, Vec<ServiceInstance>>>>,
 }
 
 impl<T: NamingService> NacosLoadBalancer<T> {
-    pub fn new(client: T, group_name: String) -> Self {
+    pub fn new(client:Arc<T>, group_name: String) -> Self {
         NacosLoadBalancer {
             client,
             group_name,
@@ -74,7 +74,8 @@ impl<T: NamingService + Send + Sync + 'static> Middleware for NacosLoadBalancer<
 
         match ints.choose(&mut StdRng::from_entropy()) {
             Some(inst) => {
-                url.set_host(Some(&inst.ip_and_port())).unwrap();
+                url.set_host(Some(inst.ip())).unwrap();
+                url.set_port(Some(inst.port() as u16)).unwrap();
                 next.run(req, extensions).await
             }
             None => Err(reqwest_middleware::Error::Middleware(anyhow::anyhow!(
@@ -164,8 +165,8 @@ impl JobScheduler {
                 Box::pin(async move {
                     info!("start execute job: {}", job.name);
                     match job.run(http_client.clone()).await {
-                        Ok(resp) => info!("execte job: {} success, result: {}", job.name, resp),
-                        Err(err) => warn!("execte job: {} failed, result: {:?}", job.name, err),
+                        Ok(resp) => info!("execute job: {} success, result: {}", job.name, resp),
+                        Err(err) => warn!("execute job: {} failed, result: {:?}", job.name, err),
                     }
                 })
             }))
