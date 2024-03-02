@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         js: Arc::new(Mutex::new(js)),
     };
     let app = Router::new()
-        // .route("/reload", post(reload))
+        .route("/reload", post(reload))
         .route("/trigger/:job_id", post(trigger))
         .with_state(app_state);
     let listener = TcpListener::bind(format!("0.0.0.0:{}", cli.listen_port)).await?;
@@ -141,6 +141,22 @@ async fn main() -> anyhow::Result<()> {
 async fn read_jobs(path: &PathBuf) -> anyhow::Result<Vec<Job>> {
     let file_content = std::fs::read_to_string(path)?;
     Ok(serde_yaml::from_str::<Jobs>(&file_content)?.jobs)
+}
+
+async fn reload(
+    State(state): State<AppState>,
+) -> Result<(), AppError> {
+    let mut new_js = JobScheduler::new(state.http_client.clone()).await;
+    read_jobs(&state.path)
+        .await?
+        .into_iter()
+        .for_each(|j| new_js.add(j));
+
+    let mut jsptr = state.js.lock().await;
+    jsptr.shutdown().await?;
+    new_js.start().await?;
+    *jsptr = new_js;
+    Ok(())
 }
 
 async fn trigger(
