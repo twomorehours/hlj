@@ -35,7 +35,7 @@ struct Cli {
     job_conf_path: PathBuf,
     #[arg(long, default_value = "50700")]
     listen_port: u16,
-    #[arg(long, default_value = "3")]
+    #[arg(long, default_value = "10")]
     req_timeout_secs: u64,
 }
 
